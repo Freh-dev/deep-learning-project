@@ -21,12 +21,19 @@ A deep learning system that automatically classifies EU AI Act regulatory risk l
 | **CARRT** | Constraint-Aware Regulatory Risk Transformer (novel architecture) |
 
 ## Repository Structure
+
 ├── data/ # Dataset (raw and processed)
+
 ├── notebooks/ # Jupyter notebooks (EDA, baseline, final)
+
 ├── src/ # Source code
+
 ├── models/ # Saved model checkpoints
+
 ├── reports/ # Proposal and final report
+
 ├── presentations/ # Final presentation
+
 └── results/ # Experiment outputs and figures
 
 ## Requirements
