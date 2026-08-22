@@ -1,4 +1,3 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 # AI Regulatory Risk Detection and Evidence Retrieval
 
 ## Project Overview
