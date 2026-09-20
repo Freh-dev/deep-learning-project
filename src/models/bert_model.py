@@ -1,178 +1,170 @@
+import argparse
 import json
-import pandas as pd
+import random
+from pathlib import Path
+
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, accuracy_score
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
-from transformers import DataCollatorWithPadding, BertConfig
 import torch
-from torch.utils.data import Dataset
-import os
-
-# Suppress symlink warning
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-print("=" * 60)
-print("🤖 Model 2: BERT Fine-Tuning")
-print("=" * 60)
-
-# ============================================================
-# STEP 1: Load and prepare data
-# ============================================================
-print("\n📂 Loading scenarios.json...")
-with open("../scenarios.json", "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-scenarios = data['data']
-df = pd.DataFrame(scenarios)
-
-# Encode labels
-label_encoder = LabelEncoder()
-df['risk_label'] = label_encoder.fit_transform(df['risk_level'])
-print(f"✅ Labels: {list(label_encoder.classes_)}")
-print(f"✅ Encoded: {dict(zip(label_encoder.classes_, range(len(label_encoder.classes_))))}")
-
-# Create text features
-def create_text(row):
-    fields = ['intended_use', 'system_type', 'input_data', 'domain']
-    return " ".join([str(row[f]) for f in fields if pd.notna(row[f])])
-
-df['text'] = df.apply(create_text, axis=1)
-
-# Split data
-X_train, X_test, y_train, y_test = train_test_split(
-    df['text'].values, df['risk_label'].values, 
-    test_size=0.2, random_state=42, stratify=df['risk_label'].values
+from datasets import Dataset
+from sklearn.metrics import accuracy_score, classification_report, f1_score
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    Trainer,
+    TrainingArguments,
+    set_seed,
 )
 
-print(f"📊 Training: {len(X_train)}, Testing: {len(X_test)}")
+from src.data.preprocess import EXPECTED_LABELS, load_scenarios, split_scenarios
 
-# ============================================================
-# STEP 2: Create PyTorch Dataset
-# ============================================================
-class AIDataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_length=512):
-        self.texts = texts
-        self.labels = labels
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-    
-    def __len__(self):
-        return len(self.texts)
-    
-    def __getitem__(self, idx):
-        text = str(self.texts[idx])
-        label = self.labels[idx]
-        
-        encoding = self.tokenizer(
-            text,
-            truncation=True,
-            padding='max_length',
-            max_length=self.max_length,
-            return_tensors='pt'
+MODEL_NAME = "bert-base-uncased"
+MAX_LENGTH = 64
+SEED = 42
+
+
+def set_reproducible_seed(seed=SEED):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    set_seed(seed)
+
+
+def tokenize_splits(tokenizer, splits, max_length=MAX_LENGTH):
+    tokenized = {}
+    for name, dataframe in splits.items():
+        dataset = Dataset.from_dict(
+            {
+                "text": dataframe["text"].tolist(),
+                "labels": dataframe["label"].tolist(),
+            }
         )
-        
-        return {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': torch.tensor(label, dtype=torch.long)
-        }
 
-# ============================================================
-# STEP 3: Load BERT model
-# ============================================================
-print("\n🔄 Loading BERT model...")
-model_name = "bert-base-uncased"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+        def tokenize_batch(batch):
+            return tokenizer(
+                batch["text"],
+                truncation=True,
+                max_length=max_length,
+            )
 
-# Load model with proper configuration
-config = BertConfig.from_pretrained(
-    model_name,
-    num_labels=len(label_encoder.classes_),
-    problem_type="single_label_classification"
-)
-model = AutoModelForSequenceClassification.from_pretrained(
-    model_name, 
-    config=config
-)
+        tokenized[name] = dataset.map(
+            tokenize_batch,
+            batched=True,
+            remove_columns=["text"],
+            desc=f"Tokenizing {name}",
+        )
+    return tokenized
 
-# Create datasets
-train_dataset = AIDataset(X_train, y_train, tokenizer)
-test_dataset = AIDataset(X_test, y_test, tokenizer)
 
-# Data collator
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+def compute_metrics(eval_prediction):
+    predictions = eval_prediction.predictions
+    if isinstance(predictions, tuple):
+        predictions = predictions[0]
+    predicted_labels = np.argmax(predictions, axis=1)
+    labels = eval_prediction.label_ids
+    return {
+        "accuracy": accuracy_score(labels, predicted_labels),
+        "macro_f1": f1_score(labels, predicted_labels, average="macro"),
+        "weighted_f1": f1_score(labels, predicted_labels, average="weighted"),
+    }
 
-# ============================================================
-# STEP 4: Setup training (FIXED - removed report_to)
-# ============================================================
-print("\n🔄 Setting up training...")
-training_args = TrainingArguments(
-    output_dir="./bert_results",
-    num_train_epochs=3,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    warmup_steps=100,
-    weight_decay=0.01,
-    logging_steps=10,
-    eval_strategy="epoch",
-    save_strategy="epoch",
-    load_best_model_at_end=True,
-    metric_for_best_model="accuracy",
-    # report_to removed - uses default (tensorboard)
-)
 
-# ============================================================
-# STEP 5: Custom metrics function
-# ============================================================
-def compute_metrics(eval_pred):
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=1)
-    return {"accuracy": accuracy_score(labels, predictions)}
+def train_bert(output_dir="results/bert", model_name=MODEL_NAME,
+               max_length=MAX_LENGTH, seed=SEED):
+    # The test set is used only after training is complete.
+    set_reproducible_seed(seed)
+    splits = split_scenarios(load_scenarios(), random_state=seed)
+    label_to_id = {label: index for index, label in enumerate(EXPECTED_LABELS)}
+    id_to_label = {index: label for label, index in label_to_id.items()}
 
-# ============================================================
-# STEP 6: Train the model
-# ============================================================
-print("\n🔄 Training BERT (this may take 5-10 minutes)...")
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=test_dataset,
-    data_collator=data_collator,
-    compute_metrics=compute_metrics,
-)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenized = tokenize_splits(tokenizer, splits, max_length=max_length)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=len(EXPECTED_LABELS),
+        id2label=id_to_label,
+        label2id=label_to_id,
+        problem_type="single_label_classification",
+    )
 
-trainer.train()
+    output_path = Path(output_dir)
+    training_args = TrainingArguments(
+        output_dir=str(output_path),
+        num_train_epochs=3,
+        learning_rate=2e-5,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=8,
+        warmup_ratio=0.1,
+        weight_decay=0.01,
+        logging_strategy="steps",
+        logging_steps=10,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="macro_f1",
+        greater_is_better=True,
+        save_total_limit=2,
+        report_to="none",
+        seed=seed,
+        data_seed=seed,
+        dataloader_num_workers=0,
+    )
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized["train"],
+        eval_dataset=tokenized["validation"],
+        data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+        compute_metrics=compute_metrics,
+    )
+    trainer.train()
+    test_result = trainer.evaluate(tokenized["test"], metric_key_prefix="test")
+    predictions = trainer.predict(tokenized["test"])
+    predicted_labels = np.argmax(predictions.predictions, axis=1)
+    test_labels = splits["test"]["label"].to_numpy()
+    metrics = {
+        "test": test_result,
+        "classification_report": classification_report(
+            test_labels,
+            predicted_labels,
+            labels=range(len(EXPECTED_LABELS)),
+            target_names=EXPECTED_LABELS,
+            output_dict=True,
+            zero_division=0,
+        ),
+        "label_to_id": label_to_id,
+        "model_name": model_name,
+        "max_length": max_length,
+        "seed": seed,
+    }
+    output_path.mkdir(parents=True, exist_ok=True)
+    tokenizer.save_pretrained(output_path)
+    with (output_path / "metrics.json").open("w", encoding="utf-8") as file:
+        json.dump(metrics, file, indent=2)
+    print(json.dumps(metrics, indent=2))
+    return metrics
 
-# ============================================================
-# STEP 7: Evaluate
-# ============================================================
-print("\n📊 Evaluating BERT...")
-predictions = trainer.predict(test_dataset)
-y_pred = np.argmax(predictions.predictions, axis=1)
-y_test_labels = label_encoder.inverse_transform(y_test)
-y_pred_labels = label_encoder.inverse_transform(y_pred)
 
-print(f"\n📊 Model 2 Results:")
-print(f"   Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-print(f"\n   Classification Report:")
-print(classification_report(y_test_labels, y_pred_labels))
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", default="results/bert")
+    parser.add_argument("--model-name", default=MODEL_NAME)
+    parser.add_argument("--max-length", type=int, default=MAX_LENGTH)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--tokenize-only",
+        action="store_true",
+        help="Validate loading and tokenization without downloading model weights or training.",
+    )
+    args = parser.parse_args()
+    if args.tokenize_only:
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+        splits = split_scenarios(load_scenarios(), random_state=args.seed)
+        tokenized = tokenize_splits(tokenizer, splits, max_length=args.max_length)
+        print({name: len(dataset) for name, dataset in tokenized.items()})
+    else:
+        train_bert(args.output_dir, args.model_name, args.max_length, args.seed)
 
-# Per-class metrics
-from sklearn.metrics import precision_recall_fscore_support
-precision, recall, f1, support = precision_recall_fscore_support(
-    y_test, y_pred, average=None, labels=[0, 1, 2, 3]
-)
 
-print("\n📊 Per-class performance summary:")
-for i, class_name in enumerate(label_encoder.classes_):
-    print(f"\n{class_name.upper()}:")
-    print(f"   Precision: {precision[i]:.3f}")
-    print(f"   Recall: {recall[i]:.3f}")
-    print(f"   F1-score: {f1[i]:.3f}")
-    print(f"   Support: {support[i]}")
-
-print("\n✅ Model 2 Complete!")
-print("=" * 60)
+if __name__ == "__main__":
+    main()

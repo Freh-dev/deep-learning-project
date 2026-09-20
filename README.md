@@ -8,6 +8,9 @@ A deep learning system that automatically classifies EU AI Act regulatory risk l
 ## Research Question
 **Can injecting regulatory rules into a Transformer's attention mechanism (CARRT) improve risk classification on EU AI Act scenarios compared to standard fine-tuned BERT?**
 
+## Course Scope
+This project stays within the course topics. The TF-IDF + XGBoost model is the baseline, BERT uses the course material on embeddings and attention/Transformers, and CARRT is a focused rule-aware extension of the BERT attention idea. No CNN, RNN, generative model, retrieval system, or unrelated architecture is required for the classification experiment.
+
 ## Dataset
 - **AI Act Evaluation Benchmark** (Davvetas et al., 2026)
 - **Contents:** 339 labeled scenarios (Prohibited: 70, High-Risk: 86, Limited: 84, Minimal: 99) + 137 QA pairs
@@ -53,15 +56,31 @@ A deep learning system that automatically classifies EU AI Act regulatory risk l
     └── utils/ # Helper functions and utilities
 
 ## Requirements
-- Python 3.9+
-- Install dependencies: `pip install -r requirements.txt`
+- Python 3.11 recommended
+- Create the environment: `py -3.11 -m venv .venv`
+- Activate it in PowerShell: `.\.venv\Scripts\Activate.ps1`
+- Install dependencies: `python -m pip install -r requirements.txt`
+
+## Reproducible Workflow
+Run commands from the repository root with the project interpreter:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.data.load_benchmark
+.\.venv\Scripts\python.exe -m src.models.xgboost_model
+.\.venv\Scripts\python.exe -m src.models.bert_model --tokenize-only
+.\.venv\Scripts\python.exe -m src.models.bert_model
+```
+
+The shared preprocessing code in `src/data/preprocess.py` validates the 339 labeled scenarios, applies conservative Unicode and whitespace normalization, creates the model text from `intended_use`, `system_type`, `input_data`, and `domain`, and produces deterministic stratified train/validation/test splits. The test split is reserved for final evaluation.
+
+Start the exploratory analysis with `notebooks/01_eda_data_preparation.ipynb`. The TF-IDF/XGBoost baseline and BERT pipeline use the same normalized inputs and label mapping. BERT uses batched tokenization, dynamic padding, `max_length=64`, and validation macro-F1 for checkpoint selection.
 
 ## Project Timeline (Solo)
 | Stage | Deliverable | Due Date | Status |
 |:------|:------------|:---------|:-------|
 | 1 | Team Registration | Aug 30 | ✅ Complete |
-| 2 | Proposal | Sep 13 | 📝 In Progress |
-| 3 | EDA Notebook | Oct 4 | ⬜ Pending |
+| 2 | Proposal | Sep 13 | ✅ Complete |
+| 3 | EDA Notebook | Oct 4 | 📝 In Progress|
 | 4 | Baseline Model | Nov 1 | ⬜ Pending |
 | 5 | Final Model + Presentation | Nov 22 | ⬜ Pending |
 | 6 | Written Report | Dec 6 | ⬜ Pending |
