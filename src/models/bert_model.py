@@ -15,8 +15,9 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+from torch.nn import CrossEntropyLoss
 
-from src.data.preprocess import EXPECTED_LABELS, load_scenarios, split_scenarios
+from src.data.preprocess import EXPECTED_LABELS, get_class_weights, load_scenarios, split_scenarios
 
 MODEL_NAME = "bert-base-uncased"
 MAX_LENGTH = 64
@@ -69,11 +70,25 @@ def compute_metrics(eval_prediction):
     }
 
 
+class WeightedTrainer(Trainer):
+    def __init__(self, class_weights, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        weights = self.class_weights.to(outputs.logits.device)
+        loss = CrossEntropyLoss(weight=weights)(outputs.logits, labels)
+        return (loss, outputs) if return_outputs else loss
+
+
 def train_bert(output_dir="results/bert", model_name=MODEL_NAME,
                max_length=MAX_LENGTH, seed=SEED):
     # The test set is used only after training is complete.
     set_reproducible_seed(seed)
     splits = split_scenarios(load_scenarios(), random_state=seed)
+    class_weights = get_class_weights(splits["train"])
     label_to_id = {label: index for index, label in enumerate(EXPECTED_LABELS)}
     id_to_label = {index: label for label, index in label_to_id.items()}
 
@@ -109,7 +124,8 @@ def train_bert(output_dir="results/bert", model_name=MODEL_NAME,
         data_seed=seed,
         dataloader_num_workers=0,
     )
-    trainer = Trainer(
+    trainer = WeightedTrainer(
+        class_weights=class_weights,
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
@@ -136,6 +152,7 @@ def train_bert(output_dir="results/bert", model_name=MODEL_NAME,
         "model_name": model_name,
         "max_length": max_length,
         "seed": seed,
+        "class_weights": dict(zip(EXPECTED_LABELS, class_weights.tolist())),
     }
     output_path.mkdir(parents=True, exist_ok=True)
     tokenizer.save_pretrained(output_path)

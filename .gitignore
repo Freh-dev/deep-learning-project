@@ -220,6 +220,9 @@ __marimo__/
 # Deep learning project specific
 data/raw/
 data/processed/
+!data/processed/
+data/processed/*
+!data/processed/*.npy
 models/*.pkl
 models/*.pt
 models/*.pth

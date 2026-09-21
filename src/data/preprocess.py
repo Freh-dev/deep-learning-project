@@ -4,6 +4,7 @@ import unicodedata
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
 
 TEXT_FIELDS = ("intended_use", "system_type", "input_data", "domain")
@@ -92,7 +93,13 @@ def split_scenarios(dataframe, test_size=0.15, validation_size=0.15, random_stat
         stratify=remainder["label"],
     )
     return {
-        "train": dataframe.loc[train_indices].reset_index(drop=True),
-        "validation": dataframe.loc[validation_indices].reset_index(drop=True),
-        "test": dataframe.loc[test_indices].reset_index(drop=True),
+        "train": dataframe.loc[train_indices].copy(),
+        "validation": dataframe.loc[validation_indices].copy(),
+        "test": dataframe.loc[test_indices].copy(),
     }
+
+
+def get_class_weights(dataframe):
+    """Return balanced weights in the fixed EXPECTED_LABELS order."""
+    counts = dataframe["label"].value_counts().reindex(range(len(EXPECTED_LABELS)))
+    return np.array(len(dataframe) / (len(EXPECTED_LABELS) * counts), dtype="float32")

@@ -5,7 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from xgboost import XGBClassifier
 
-from src.data.preprocess import EXPECTED_LABELS, load_scenarios, split_scenarios
+from src.data.preprocess import EXPECTED_LABELS, get_class_weights, load_scenarios, split_scenarios
 
 
 def train_baseline(output_dir="results/xgboost"):
@@ -28,7 +28,15 @@ def train_baseline(output_dir="results/xgboost"):
         random_state=42,
         n_jobs=1,
     )
-    model.fit(train_features, splits["train"]["label"])
+    class_weights = get_class_weights(splits["train"])
+    sample_weights = splits["train"]["label"].map(
+        dict(enumerate(class_weights))
+    ).to_numpy()
+    model.fit(
+        train_features,
+        splits["train"]["label"],
+        sample_weight=sample_weights,
+    )
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -53,6 +61,7 @@ def train_baseline(output_dir="results/xgboost"):
 
     with (output_path / "metrics.json").open("w", encoding="utf-8") as file:
         json.dump(metrics, file, indent=2)
+    print("Class weights:", dict(zip(EXPECTED_LABELS, class_weights.round(3))))
     print(json.dumps(metrics, indent=2))
     return metrics
 

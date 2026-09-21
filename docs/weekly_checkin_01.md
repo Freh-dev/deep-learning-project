@@ -71,6 +71,10 @@ The BERT pipeline is ready for training:
 
 The tokenization smoke test passed for all 339 examples.
 
+## Dataset Limitation: Label Provenance
+
+The scenario labels were produced through an LLM generation pipeline and were not independently validated by legal experts case by case. The boundary between the `limited` and `minimal` classes may therefore contain label noise. Results for these classes should be interpreted with this limitation in mind.
+
 ## Not Yet Completed
 
 - Run the corrected BERT fine-tuning experiment.
