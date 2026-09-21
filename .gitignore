@@ -218,11 +218,13 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Deep learning project specific
+# Ignore raw data entirely
 data/raw/
-data/processed/
-!data/processed/
+
+# Ignore processed data except .npy files
 data/processed/*
 !data/processed/*.npy
+!data/processed/.gitkeep
 models/*.pkl
 models/*.pt
 models/*.pth
@@ -240,3 +242,12 @@ models/*.pth
 # Results and outputs
 results/
 *.log
+
+# Large model checkpoints and outputs
+reports/bert_results/
+results/
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
